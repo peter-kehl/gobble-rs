@@ -28,7 +28,8 @@ fn main() -> Result<(), anyhow::Error> {
         }
         args.remove(1);
     }
-
+    //dbg!((flag_overlap, flag_version, flag_help));
+    
     let exit_code = if flag_help {
         println!("gobble - hide your current window while using an external program");
         println!();
@@ -66,30 +67,44 @@ fn gobble_on_x11(flag_overlap: bool, args: &[String]) -> Result<i32, anyhow::Err
         .wait_for_reply(conn.send_request(&x::GetInputFocus {}))?
         .focus();
     // ensure child was spawned before we hide the window
-    let mut child: process::Child;
-    if args.len() > 1 {
-        child = command(args)?;
+    let mut child_process = if args.len() > 1 {
+        command(args)?
     } else {
-        process::exit(0);
-    }
+        process::exit(0)
+    };
+
     // If gobble opens a terminal application, it shouldn't hide
     let start = time::Instant::now();
-    let mut child_window = conn
-        .wait_for_reply(conn.send_request(&x::GetInputFocus {}))?
-        .focus();
-    while parent_window == child_window {
-        // Check timeout or if child already exited
-        if start.elapsed().as_secs() == 5 || child.try_wait()?.is_some() {
-            let exit_code = child.wait()?.code().unwrap_or(1);
-            process::exit(exit_code);
-        }
 
-        child_window = conn
-            .wait_for_reply(conn.send_request(&x::GetInputFocus {}))?
-            .focus();
+    // Check timeout or if child already exited
+    if start.elapsed().as_secs() == 5 || child_process.try_wait()?.is_some() {
+        let exit_code = child_process.wait()?.code().unwrap_or(1);
+        process::exit(exit_code);
     }
+    
+    if false {
+    let _child_window = conn
+    .wait_for_reply(conn.send_request(&x::GetInputFocus {}))?;
+    //.focus();
+    }
+
     // Overlap mode
     Ok(if flag_overlap {
+        let child_window = loop {
+            // Check timeout or if child already exited
+            if start.elapsed().as_secs() == 5 || child_process.try_wait()?.is_some() {
+                let exit_code = child_process.wait()?.code().unwrap_or(1);
+                process::exit(exit_code);
+            }
+            
+            let child_window = conn
+            .wait_for_reply(conn.send_request(&x::GetInputFocus {}))?
+            .focus();
+            if child_window!=parent_window {
+                break child_window
+            }
+        };
+
         let translate = conn.wait_for_reply(
             conn.send_request(&x::TranslateCoordinates {
                 src_window: parent_window,
@@ -119,7 +134,7 @@ fn gobble_on_x11(flag_overlap: bool, args: &[String]) -> Result<i32, anyhow::Err
         });
         conn.check_request(cookie)?;
 
-        child.wait()?.code().unwrap_or(1)
+        child_process.wait()?.code().unwrap_or(1)
     // Default behaviour
     } else {
         let unmap_attempt = conn.send_request_checked(&x::UnmapWindow {
@@ -127,7 +142,7 @@ fn gobble_on_x11(flag_overlap: bool, args: &[String]) -> Result<i32, anyhow::Err
         });
         conn.check_request(unmap_attempt)?;
 
-        let exit_code = child.wait()?.code().unwrap_or(1);
+        let exit_code = child_process.wait()?.code().unwrap_or(1);
 
         let map_attempt = conn.send_request_checked(&x::MapWindow {
             window: parent_window,
